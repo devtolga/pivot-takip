@@ -3,7 +3,30 @@ import ccxt
 import pandas as pd
 import time
 from datetime import datetime
-import winsound
+import sys # İşletim sistemi kontrolü için eklendi
+
+# --- PLATFORM KONTROLÜ VE SES AYARI ---
+# winsound sadece Windows'ta (win32) vardır. Sunucuda (Linux) hata vermemesi için
+# sys.platform kontrolü ile güvenli hale getiriyoruz.
+if sys.platform.startswith('win'):
+    try:
+        import winsound
+        windows_platform = True
+    except ImportError:
+        windows_platform = False
+else:
+    windows_platform = False
+
+def ses_cal():
+    """Sadece Windows bilgisayarda çalışırken ses çıkarır. Sunucuda sessiz kalır."""
+    if windows_platform:
+        try:
+            # Ses tonu ve süresi (Hertz, Milisaniye)
+            winsound.Beep(1000, 500)
+        except Exception as e:
+            # winsound.Beep bazen başka bir uygulama sesi kullandığı için hata verebilir.
+            pass
+    # Linux veya Mac'te (Sunucuda) hiçbir şey yapmaz (Sessiz)
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Pro Pivot Terminali (Tablo Modu)", layout="wide", page_icon="🦁")
@@ -95,9 +118,7 @@ def parse_symbol(tv_string):
         return (exchange_id, final_symbol, is_futures, tv_string)
     except: return None
 
-def ses_cal():
-    try: winsound.Beep(1000, 500)
-    except: pass
+# ses_cal fonksiyonu yukarıda tanımlanan güvenli fonksiyona göre kaldırıldı
 
 def tarama_yap(p_tf):
     items = [x.strip() for x in raw_input.split(',')]
@@ -171,7 +192,7 @@ def tarama_yap(p_tf):
     progress_bar.empty()
     status_text.empty()
     
-    if yeni_sinyal and sesli_uyari: ses_cal()
+    if yeni_sinyal and sesli_uyari: ses_cal() # Güvenli ses_cal fonksiyonunu çağırır
     
     st.session_state.son_guncelleme = datetime.now().strftime('%H:%M:%S')
     return pd.DataFrame(veriler)
