@@ -147,4 +147,131 @@ def tarama_yap(p_tf, p_label):
         if not item: continue
         parsed = parse_symbol(item)
         if not parsed: continue
-        exc_id, symbol, is_futures, orig
+        exc_id, symbol, is_futures, orig_name = parsed
+        
+        try:
+            exchange = exchanges[exc_id]
+            params = {'type': 'swap'} if is_futures else {}
+            if is_futures and exc_id == 'mexc' and ':' not in symbol: symbol += ":USDT"
+
+            # 1. PIVOT HESAPLAMA
+            htf_candles = exchange.fetch_ohlcv(symbol, timeframe=p_tf, limit=2, params=params)
+            if len(htf_candles) < 2: continue
+            prev = htf_candles[0] 
+            pivot = (prev[2] + prev[3] + prev[4]) / 3
+            
+            # 2. ANLIK VERİ
+            klines = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=400, params=params)
+            if len(klines) < ema_periyot: continue
+            
+            df_close = pd.Series([x[4] for x in klines])
+            current_price = klines[-1][4]
+            
+            rsi_val = round(calculate_rsi(df_close, rsi_periyot).iloc[-1], 2)
+            ema_val = calculate_ema(df_close, ema_periyot).iloc[-1]
+            
+            trend = "YÜKSELİŞ 🐂" if current_price > ema_val else "DÜŞÜŞ 🐻"
+            fark = ((current_price - pivot) / pivot) * 100
+            durum = "🟢 ÜSTÜNDE" if current_price > pivot else "🔴 ALTINDA"
+            
+            sinyal_txt = "Sakin"
+            uyari_var = False
+            
+            if abs(fark) < 0.6:
+                sinyal_txt = "⚠️ KIRILIM YAKIN"
+                uyari_var = True
+                if (current_price > pivot and current_price < ema_val) or \
+                   (current_price < pivot and current_price > ema_val):
+                    sinyal_txt += " (Trend Tersi!)"
+            
+            if uyari_var: yeni_sinyal = True
+                
+            veriler.append({
+                "Borsa": exc_id.upper(),
+                "Coin": orig_name,
+                "Fiyat": current_price,
+                "Pivot": round(pivot, 4),
+                "Fark (%)": round(fark, 2),
+                "RSI": rsi_val,
+                "Trend": trend,
+                "Durum": durum,
+                "Sinyal": sinyal_txt,
+                "Veri": klines[-50:], 
+                "EMA_Val": ema_val,
+                "Pivot_Label": p_label
+            })
+            
+        except Exception as e: pass
+        
+        status_text.text(f"Taranıyor ({p_label}): {orig_name}...")
+        progress_bar.progress((i + 1) / len(items))
+        
+    progress_bar.empty()
+    status_text.empty()
+    
+    if yeni_sinyal and sesli_uyari: ses_cal()
+    
+    st.session_state.son_guncelleme = datetime.now().strftime('%H:%M:%S')
+    return pd.DataFrame(veriler)
+
+# --- ARAYÜZ AKIŞI ---
+st.title(f"🦁 Pro Pivot Terminali: {secilen_pivot_isim}")
+
+# Tarama Tetikleyicisi
+run_scan = False
+if tara_buton:
+    run_scan = True
+elif oto_yenile:
+    # Otomatik yenileme seçiliyse her zaman tarama yapacak
+    run_scan = True
+
+# Tarama İşlemi
+if run_scan:
+    with st.spinner(f'{secilen_pivot_isim} verileri taranıyor...'):
+        df_sonuc = tarama_yap(pivot_tf, secilen_pivot_isim)
+        st.session_state.df = df_sonuc
+
+# Sonuç Gösterimi
+if not st.session_state.df.empty:
+    df = st.session_state.df
+    st.info(f"Son Güncelleme: {st.session_state.son_guncelleme} | Referans: {secilen_pivot_isim} | EMA: {ema_periyot}")
+    
+    # EKRANI İKİYE BÖLME
+    col1, col2 = st.columns([3, 2]) # Sol taraf (3 birim), Sağ taraf (2 birim)
+
+    with col1:
+        st.subheader("📊 Piyasa Tablosu")
+        st.dataframe(
+            df[['Borsa', 'Coin', 'Fiyat', 'Pivot', 'Fark (%)', 'RSI', 'Trend', 'Durum', 'Sinyal']].style.applymap(
+                lambda x: 'color: green' if 'YÜKSELİŞ' in str(x) else 'color: red' if 'DÜŞÜŞ' in str(x) else '', subset=['Trend']
+            ).format({"Fiyat": "{:.4f}", "RSI": "{:.2f}", "Pivot": "{:.4f}"}),
+            height=600, use_container_width=True
+        )
+
+    with col2:
+        st.subheader("🔍 Grafik Analizi")
+        # Grafik seçimi
+        secim = st.selectbox("Grafik Görüntüle:", df['Coin'].tolist())
+        
+        if secim:
+            row = df[df['Coin'] == secim].iloc[0]
+            fig = grafik_ciz(f"{row['Borsa']} - {row['Coin']}", row['Pivot'], row['Fiyat'], row['Veri'], row['RSI'], row['EMA_Val'], row['Pivot_Label'])
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Kartlar
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Pivot Farkı", f"% {row['Fark (%)']}")
+            c2.metric("RSI", f"{row['RSI']}")
+            c3.metric("Trend", "BULLISH" if "YÜKSELİŞ" in row['Trend'] else "BEARISH", delta_color="normal")
+
+else:
+    st.warning("Henüz tarama yapılmadı. Sol menüden 'Taramayı Başlat' butonuna basın.")
+
+# Otomatik Yenileme Mantığı
+if oto_yenile:
+    countdown_container = st.empty()
+    for i in range(yenileme_hizi, 0, -1):
+        countdown_container.info(f"⏳ Bir sonraki tarama için kalan süre: {i} saniye")
+        time.sleep(1)
+    countdown_container.empty()
+    st.rerun()
