@@ -4,9 +4,25 @@ import pandas as pd
 import time
 import plotly.graph_objects as go
 from datetime import datetime
+import sys
+
+# --- PLATFORM VE SES KONTROLÜ ---
+if sys.platform.startswith('win'):
+    try:
+        import winsound
+        windows_platform = True
+    except ImportError:
+        windows_platform = False
+else:
+    windows_platform = False
+
+def ses_cal():
+    if windows_platform:
+        try: winsound.Beep(1000, 500)
+        except: pass
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Pro Pivot Terminali V12", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Pro Pivot Terminali V11", layout="wide", page_icon="🦁")
 
 # --- HAFIZA (SESSION STATE) ---
 if 'df' not in st.session_state:
@@ -33,7 +49,8 @@ secilen_pivot_isim = st.sidebar.selectbox("Pivot Zaman Dilimi", list(pivot_secen
 pivot_tf = pivot_secenekleri[secilen_pivot_isim]
 
 oto_yenile = st.sidebar.checkbox("Otomatik Yenileme (Döngü)", value=False)
-yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 10, 300, 60)
+yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 30, 600, 60)
+sesli_uyari = st.sidebar.checkbox("Sesli Alarm 🔊", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 İndikatör Ayarları")
@@ -107,6 +124,7 @@ def grafik_ciz(baslik, pivot, current_price, ohlc_data, rsi_val, ema_val, pivot_
 def tarama_yap(p_tf, p_label):
     items = [x.strip() for x in raw_input.split(',')]
     veriler = []
+    yeni_sinyal = False
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -140,12 +158,15 @@ def tarama_yap(p_tf, p_label):
             durum = "🟢 ÜSTÜNDE" if current_price > pivot else "🔴 ALTINDA"
             
             sinyal_txt = "Sakin"
+            uyari_var = False
             
             if abs(fark) < 0.6:
                 sinyal_txt = "⚠️ KIRILIM YAKIN"
+                uyari_var = True
                 if (current_price > pivot and current_price < ema_val) or \
                    (current_price < pivot and current_price > ema_val):
                     sinyal_txt += " (Trend Tersi!)"
+            if uyari_var: yeni_sinyal = True
                 
             veriler.append({
                 "Borsa": exc_id.upper(), "Coin": orig_name, "Fiyat": current_price,
@@ -160,6 +181,7 @@ def tarama_yap(p_tf, p_label):
         
     progress_bar.empty()
     status_text.empty()
+    if yeni_sinyal and sesli_uyari: ses_cal()
     
     st.session_state.son_guncelleme = datetime.now().strftime('%H:%M:%S')
     st.session_state.last_fetch_time = time.time()
@@ -173,7 +195,7 @@ should_run_scan = False
 if tara_buton:
     should_run_scan = True
 
-# Otomatik yenileme kontrolü (Süreye göre)
+# Otomatik yenileme kontrolü
 if oto_yenile:
     gecen_sure = time.time() - st.session_state.last_fetch_time
     if gecen_sure > yenileme_hizi:
@@ -229,22 +251,7 @@ if not st.session_state.df.empty:
 else:
     st.warning("Henüz tarama yapılmadı. Sol menüden 'Taramayı Başlat' butonuna basın.")
 
-# --- GERİ SAYIM SAYACI ---
+# OTOMATİK YENİLEME LOOPU (Sürekli Yenileme Yerine Sleep Kullanımı)
 if oto_yenile:
-    # Kalan süreyi hesapla
-    gecen_sure = time.time() - st.session_state.last_fetch_time
-    kalan_sure = int(yenileme_hizi - gecen_sure)
-    
-    # Sayacı göster (Main alanın en altında)
-    if kalan_sure > 0:
-        # Sayacı güncellemek için anlık döngü
-        # Not: Döngü yerine tek tek rerun yapmak tıklamayı zorlaştırıyordu.
-        # Bu yüzden burada sadece bilgiyi gösterip 1 saniye uyuyoruz.
-        # Streamlit tekrar başa dönüyor.
-        
-        st.divider()
-        st.info(f"⏳ Otomatik yenilemeye yaklaşık **{kalan_sure}** saniye kaldı...")
-        time.sleep(1)
-        st.rerun()
-    else:
-        st.rerun()
+    time.sleep(yenileme_hizi)
+    st.rerun()
