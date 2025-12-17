@@ -2,12 +2,11 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import time
+import plotly.graph_objects as go
 from datetime import datetime
-import sys # İşletim sistemi kontrolü için eklendi
+import sys
 
-# --- PLATFORM KONTROLÜ VE SES AYARI ---
-# winsound sadece Windows'ta (win32) vardır. Sunucuda (Linux) hata vermemesi için
-# sys.platform kontrolü ile güvenli hale getiriyoruz.
+# --- PLATFORM VE SES KONTROLÜ ---
 if sys.platform.startswith('win'):
     try:
         import winsound
@@ -18,20 +17,15 @@ else:
     windows_platform = False
 
 def ses_cal():
-    """Sadece Windows bilgisayarda çalışırken ses çıkarır. Sunucuda sessiz kalır."""
+    """Sadece Windows'ta ses çıkarır."""
     if windows_platform:
-        try:
-            # Ses tonu ve süresi (Hertz, Milisaniye)
-            winsound.Beep(1000, 500)
-        except Exception as e:
-            # winsound.Beep bazen başka bir uygulama sesi kullandığı için hata verebilir.
-            pass
-    # Linux veya Mac'te (Sunucuda) hiçbir şey yapmaz (Sessiz)
+        try: winsound.Beep(1000, 500)
+        except: pass
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Pro Pivot Terminali (Tablo Modu)", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Pro Pivot Terminali V8", layout="wide", page_icon="🦁")
 
-# --- HAFIZA AYARLARI ---
+# --- HAFIZA ---
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
 if 'son_guncelleme' not in st.session_state:
@@ -39,13 +33,9 @@ if 'son_guncelleme' not in st.session_state:
 
 # --- YAN MENÜ ---
 st.sidebar.header("⚙️ Kontrol Paneli")
-
-# Taramayı Başlat Butonu
 tara_buton = st.sidebar.button("🚀 Taramayı Başlat / Yenile", type="primary")
-
 st.sidebar.markdown("---")
 
-# Pivot Zaman Dilimi Seçimi
 pivot_secenekleri = {
     "Günlük (Standart)": "1d",
     "4 Saatlik (Day Trade)": "4h",
@@ -56,7 +46,7 @@ secilen_pivot_isim = st.sidebar.selectbox("Pivot Zaman Dilimi", list(pivot_secen
 pivot_tf = pivot_secenekleri[secilen_pivot_isim]
 
 oto_yenile = st.sidebar.checkbox("Otomatik Yenileme (Döngü)", value=False)
-yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 30, 600, 60)
+yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 10, 300, 60) # Alt limit 10 yapıldı
 sesli_uyari = st.sidebar.checkbox("Sesli Alarm 🔊", value=True)
 
 st.sidebar.markdown("---")
@@ -118,14 +108,38 @@ def parse_symbol(tv_string):
         return (exchange_id, final_symbol, is_futures, tv_string)
     except: return None
 
-# ses_cal fonksiyonu yukarıda tanımlanan güvenli fonksiyona göre kaldırıldı
+# --- GRAFİK FONKSİYONU ---
+def grafik_ciz(baslik, pivot, current_price, ohlc_data, rsi_val, ema_val, pivot_label):
+    df_chart = pd.DataFrame(ohlc_data, columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
+    df_chart['Time'] = pd.to_datetime(df_chart['Time'], unit='ms')
 
-def tarama_yap(p_tf):
+    fig = go.Figure()
+
+    # Mumlar
+    fig.add_trace(go.Candlestick(x=df_chart['Time'], open=df_chart['Open'], high=df_chart['High'],
+                low=df_chart['Low'], close=df_chart['Close'], name='Fiyat'))
+
+    # Pivot (Dinamik Etiket)
+    fig.add_hline(y=pivot, line_dash="dash", line_color="yellow", annotation_text=pivot_label)
+    
+    # EMA 200 Çizgisi (Mavi)
+    fig.add_hline(y=ema_val, line_color="blue", annotation_text=f"EMA {ema_periyot} (Trend)", annotation_position="bottom right")
+
+    trend_renk = "🟢" if current_price > ema_val else "🔴"
+    
+    fig.update_layout(
+        title=f'{baslik} | RSI: {rsi_val} | Trend: {trend_renk}',
+        yaxis_title='Fiyat', template='plotly_dark', height=450,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    return fig
+
+# --- TARAMA MOTORU ---
+def tarama_yap(p_tf, p_label):
     items = [x.strip() for x in raw_input.split(',')]
     veriler = []
     yeni_sinyal = False
     
-    # İlerleme Çubuğu
     progress_bar = st.progress(0)
     status_text = st.empty()
     
@@ -133,103 +147,4 @@ def tarama_yap(p_tf):
         if not item: continue
         parsed = parse_symbol(item)
         if not parsed: continue
-        exc_id, symbol, is_futures, orig_name = parsed
-        
-        try:
-            exchange = exchanges[exc_id]
-            params = {'type': 'swap'} if is_futures else {}
-            if is_futures and exc_id == 'mexc' and ':' not in symbol: symbol += ":USDT"
-
-            # 1. PIVOT HESAPLAMA
-            htf_candles = exchange.fetch_ohlcv(symbol, timeframe=p_tf, limit=2, params=params)
-            if len(htf_candles) < 2: continue
-            prev = htf_candles[0] 
-            pivot = (prev[2] + prev[3] + prev[4]) / 3
-            
-            # 2. ANLIK VERİ
-            klines = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=400, params=params)
-            if len(klines) < ema_periyot: continue
-            
-            df_close = pd.Series([x[4] for x in klines])
-            current_price = klines[-1][4]
-            
-            rsi_val = round(calculate_rsi(df_close, rsi_periyot).iloc[-1], 2)
-            ema_val = calculate_ema(df_close, ema_periyot).iloc[-1]
-            
-            trend = "YÜKSELİŞ 🐂" if current_price > ema_val else "DÜŞÜŞ 🐻"
-            fark = ((current_price - pivot) / pivot) * 100
-            durum = "🟢 ÜSTÜNDE" if current_price > pivot else "🔴 ALTINDA"
-            
-            sinyal_txt = "Sakin"
-            uyari_var = False
-            
-            if abs(fark) < 0.6:
-                sinyal_txt = "⚠️ KIRILIM YAKIN"
-                uyari_var = True
-                if (current_price > pivot and current_price < ema_val) or \
-                   (current_price < pivot and current_price > ema_val):
-                    sinyal_txt += " (Trend Tersi!)"
-            
-            if uyari_var: yeni_sinyal = True
-                
-            veriler.append({
-                "Borsa": exc_id.upper(),
-                "Coin": orig_name,
-                "Fiyat": current_price,
-                "Pivot": round(pivot, 4),
-                "Fark (%)": round(fark, 2),
-                "RSI": rsi_val,
-                "Trend": trend,
-                "Durum": durum,  # <-- Geri Geldi
-                "Sinyal": sinyal_txt,
-            })
-            
-        except Exception as e: pass
-        
-        status_text.text(f"Taranıyor: {orig_name}...")
-        progress_bar.progress((i + 1) / len(items))
-        
-    progress_bar.empty()
-    status_text.empty()
-    
-    if yeni_sinyal and sesli_uyari: ses_cal() # Güvenli ses_cal fonksiyonunu çağırır
-    
-    st.session_state.son_guncelleme = datetime.now().strftime('%H:%M:%S')
-    return pd.DataFrame(veriler)
-
-# --- ARAYÜZ AKIŞI ---
-st.title(f"🦁 Pro Pivot Terminali: {secilen_pivot_isim}")
-
-# 1. Tarama Tetikleyicisi
-run_scan = False
-if tara_buton:
-    run_scan = True
-elif oto_yenile:
-    run_scan = True
-
-# 2. Tarama İşlemi
-if run_scan:
-    with st.spinner(f'{secilen_pivot_isim} verileri taranıyor...'):
-        df_sonuc = tarama_yap(pivot_tf)
-        st.session_state.df = df_sonuc
-
-# 3. Sonuç Gösterimi
-if not st.session_state.df.empty:
-    df = st.session_state.df
-    st.info(f"Son Güncelleme: {st.session_state.son_guncelleme} | Referans: {secilen_pivot_isim} | EMA: {ema_periyot}")
-    
-    # Tam ekran tablo (use_container_width=True)
-    st.dataframe(
-        df[['Borsa', 'Coin', 'Fiyat', 'Pivot', 'Fark (%)', 'RSI', 'Trend', 'Durum', 'Sinyal']].style.applymap(
-            lambda x: 'color: green' if 'YÜKSELİŞ' in str(x) else 'color: red' if 'DÜŞÜŞ' in str(x) else '', subset=['Trend']
-        ).format({"Fiyat": "{:.4f}", "RSI": "{:.2f}", "Pivot": "{:.4f}"}),
-        height=700, 
-        use_container_width=True
-    )
-
-else:
-    st.warning("Henüz tarama yapılmadı. Sol menüden 'Taramayı Başlat' butonuna basın.")
-
-if oto_yenile:
-    time.sleep(yenileme_hizi)
-    st.rerun()
+        exc_id, symbol, is_futures, orig
