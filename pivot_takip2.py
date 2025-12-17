@@ -17,19 +17,21 @@ else:
     windows_platform = False
 
 def ses_cal():
-    """Sadece Windows'ta ses çıkarır."""
     if windows_platform:
         try: winsound.Beep(1000, 500)
         except: pass
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Pro Pivot Terminali V8", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Pro Pivot Terminali V9", layout="wide", page_icon="🦁")
 
 # --- HAFIZA ---
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
 if 'son_guncelleme' not in st.session_state:
     st.session_state.son_guncelleme = "-"
+# Seçilen coini hafızada tutmak için değişken
+if 'secilen_coin_kodu' not in st.session_state:
+    st.session_state.secilen_coin_kodu = None
 
 # --- YAN MENÜ ---
 st.sidebar.header("⚙️ Kontrol Paneli")
@@ -46,7 +48,7 @@ secilen_pivot_isim = st.sidebar.selectbox("Pivot Zaman Dilimi", list(pivot_secen
 pivot_tf = pivot_secenekleri[secilen_pivot_isim]
 
 oto_yenile = st.sidebar.checkbox("Otomatik Yenileme (Döngü)", value=False)
-yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 10, 300, 60) # Alt limit 10 yapıldı
+yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 10, 300, 60)
 sesli_uyari = st.sidebar.checkbox("Sesli Alarm 🔊", value=True)
 
 st.sidebar.markdown("---")
@@ -108,7 +110,6 @@ def parse_symbol(tv_string):
         return (exchange_id, final_symbol, is_futures, tv_string)
     except: return None
 
-# --- GRAFİK FONKSİYONU ---
 def grafik_ciz(baslik, pivot, current_price, ohlc_data, rsi_val, ema_val, pivot_label):
     df_chart = pd.DataFrame(ohlc_data, columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
     df_chart['Time'] = pd.to_datetime(df_chart['Time'], unit='ms')
@@ -134,7 +135,6 @@ def grafik_ciz(baslik, pivot, current_price, ohlc_data, rsi_val, ema_val, pivot_
     )
     return fig
 
-# --- TARAMA MOTORU ---
 def tarama_yap(p_tf, p_label):
     items = [x.strip() for x in raw_input.split(',')]
     veriler = []
@@ -217,57 +217,77 @@ def tarama_yap(p_tf, p_label):
 # --- ARAYÜZ AKIŞI ---
 st.title(f"🦁 Pro Pivot Terminali: {secilen_pivot_isim}")
 
-# Tarama Tetikleyicisi
 run_scan = False
 if tara_buton:
     run_scan = True
 elif oto_yenile:
-    # Otomatik yenileme seçiliyse her zaman tarama yapacak
     run_scan = True
 
-# Tarama İşlemi
+# Tarama
 if run_scan:
     with st.spinner(f'{secilen_pivot_isim} verileri taranıyor...'):
         df_sonuc = tarama_yap(pivot_tf, secilen_pivot_isim)
         st.session_state.df = df_sonuc
 
-# Sonuç Gösterimi
+# GÖSTERİM BÖLÜMÜ
 if not st.session_state.df.empty:
     df = st.session_state.df
     st.info(f"Son Güncelleme: {st.session_state.son_guncelleme} | Referans: {secilen_pivot_isim} | EMA: {ema_periyot}")
     
-    # EKRANI İKİYE BÖLME
-    col1, col2 = st.columns([3, 2]) # Sol taraf (3 birim), Sağ taraf (2 birim)
+    col1, col2 = st.columns([3, 2])
 
     with col1:
-        st.subheader("📊 Piyasa Tablosu")
-        st.dataframe(
+        st.subheader("📊 Piyasa Tablosu (Seçim Yapın)")
+        
+        # --- TABLO SEÇİM MANTIĞI (INTERAKTİF) ---
+        # selection_mode="single-row": Sadece tek satır seçilebilir
+        # on_select="rerun": Seçim yapılınca uygulamayı yenile ve grafiği göster
+        event = st.dataframe(
             df[['Borsa', 'Coin', 'Fiyat', 'Pivot', 'Fark (%)', 'RSI', 'Trend', 'Durum', 'Sinyal']].style.applymap(
                 lambda x: 'color: green' if 'YÜKSELİŞ' in str(x) else 'color: red' if 'DÜŞÜŞ' in str(x) else '', subset=['Trend']
             ).format({"Fiyat": "{:.4f}", "RSI": "{:.2f}", "Pivot": "{:.4f}"}),
-            height=600, use_container_width=True
+            height=600, 
+            use_container_width=True,
+            on_select="rerun", 
+            selection_mode="single-row"
         )
+        
+        # Seçilen satırı yakala
+        if len(event.selection.rows) > 0:
+            secilen_index = event.selection.rows[0]
+            # Seçilen coini hafızaya kaydet ki sayfa yenilenince gitmesin
+            st.session_state.secilen_coin_kodu = df.iloc[secilen_index]['Coin']
 
     with col2:
         st.subheader("🔍 Grafik Analizi")
-        # Grafik seçimi
-        secim = st.selectbox("Grafik Görüntüle:", df['Coin'].tolist())
         
-        if secim:
-            row = df[df['Coin'] == secim].iloc[0]
-            fig = grafik_ciz(f"{row['Borsa']} - {row['Coin']}", row['Pivot'], row['Fiyat'], row['Veri'], row['RSI'], row['EMA_Val'], row['Pivot_Label'])
-            st.plotly_chart(fig, use_container_width=True)
+        # Eğer tablodan bir şey seçildiyse onu, seçilmediyse listenin ilkini göster
+        gosterilecek_coin = st.session_state.secilen_coin_kodu
+        
+        # Eğer hafızada coin yoksa ama tablo doluysa ilkini seç
+        if gosterilecek_coin is None and not df.empty:
+            gosterilecek_coin = df.iloc[0]['Coin']
             
-            # Kartlar
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Pivot Farkı", f"% {row['Fark (%)']}")
-            c2.metric("RSI", f"{row['RSI']}")
-            c3.metric("Trend", "BULLISH" if "YÜKSELİŞ" in row['Trend'] else "BEARISH", delta_color="normal")
+        if gosterilecek_coin:
+            # Seçilen coinin verilerini bul
+            try:
+                row = df[df['Coin'] == gosterilecek_coin].iloc[0]
+                
+                # Grafiği çiz
+                fig = grafik_ciz(f"{row['Borsa']} - {row['Coin']}", row['Pivot'], row['Fiyat'], row['Veri'], row['RSI'], row['EMA_Val'], row['Pivot_Label'])
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Bilgi Kartları
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Pivot Farkı", f"% {row['Fark (%)']}")
+                c2.metric("RSI", f"{row['RSI']}")
+                c3.metric("Trend", "BULLISH" if "YÜKSELİŞ" in row['Trend'] else "BEARISH", delta_color="normal")
+            except IndexError:
+                st.warning("Seçilen coinin verisi güncel listede bulunamadı. Lütfen tekrar tarama yapın.")
 
 else:
     st.warning("Henüz tarama yapılmadı. Sol menüden 'Taramayı Başlat' butonuna basın.")
 
-# Otomatik Yenileme Mantığı
 if oto_yenile:
     countdown_container = st.empty()
     for i in range(yenileme_hizi, 0, -1):
