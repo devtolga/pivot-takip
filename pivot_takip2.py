@@ -22,7 +22,7 @@ def ses_cal():
         except: pass
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Pro Pivot Terminali V10", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Pro Pivot Terminali V11", layout="wide", page_icon="🦁")
 
 # --- HAFIZA (SESSION STATE) ---
 if 'df' not in st.session_state:
@@ -31,7 +31,6 @@ if 'son_guncelleme' not in st.session_state:
     st.session_state.son_guncelleme = "-"
 if 'secilen_coin_kodu' not in st.session_state:
     st.session_state.secilen_coin_kodu = None
-# YENİ: Son tarama zamanını hafızada tutuyoruz
 if 'last_fetch_time' not in st.session_state:
     st.session_state.last_fetch_time = 0
 
@@ -50,7 +49,7 @@ secilen_pivot_isim = st.sidebar.selectbox("Pivot Zaman Dilimi", list(pivot_secen
 pivot_tf = pivot_secenekleri[secilen_pivot_isim]
 
 oto_yenile = st.sidebar.checkbox("Otomatik Yenileme (Döngü)", value=False)
-yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 10, 300, 60)
+yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 30, 600, 60)
 sesli_uyari = st.sidebar.checkbox("Sesli Alarm 🔊", value=True)
 
 st.sidebar.markdown("---")
@@ -99,7 +98,6 @@ def parse_symbol(tv_string):
         elif 'BITGET' in exchange_tag: exchange_id = 'bitget'
         elif 'HTX' in exchange_tag: exchange_id = 'htx'
         elif 'COINEX' in exchange_tag: exchange_id = 'coinex'
-        
         is_futures = symbol_raw.endswith('.P')
         clean_symbol = symbol_raw.replace('.P', '') if is_futures else symbol_raw
         if clean_symbol.endswith('USDT'): base, quote = clean_symbol[:-4], 'USDT'
@@ -118,11 +116,9 @@ def grafik_ciz(baslik, pivot, current_price, ohlc_data, rsi_val, ema_val, pivot_
                 low=df_chart['Low'], close=df_chart['Close'], name='Fiyat'))
     fig.add_hline(y=pivot, line_dash="dash", line_color="yellow", annotation_text=pivot_label)
     fig.add_hline(y=ema_val, line_color="blue", annotation_text=f"EMA {ema_periyot} (Trend)", annotation_position="bottom right")
-
     trend_renk = "🟢" if current_price > ema_val else "🔴"
     fig.update_layout(title=f'{baslik} | RSI: {rsi_val} | Trend: {trend_renk}',
-        yaxis_title='Fiyat', template='plotly_dark', height=450,
-        margin=dict(l=20, r=20, t=40, b=20))
+        yaxis_title='Fiyat', template='plotly_dark', height=450, margin=dict(l=20, r=20, t=40, b=20))
     return fig
 
 def tarama_yap(p_tf, p_label):
@@ -188,32 +184,30 @@ def tarama_yap(p_tf, p_label):
     if yeni_sinyal and sesli_uyari: ses_cal()
     
     st.session_state.son_guncelleme = datetime.now().strftime('%H:%M:%S')
-    st.session_state.last_fetch_time = time.time() # Son tarama zamanını kaydet
+    st.session_state.last_fetch_time = time.time()
     return pd.DataFrame(veriler)
 
-# --- TARAMA TETİKLEME MANTIĞI (DÜZELTİLDİ) ---
+# --- TARAMA TETİKLEME MANTIĞI ---
+st.title(f"🦁 Pro Pivot Terminali: {secilen_pivot_isim}")
+
 should_run_scan = False
 
-# 1. Manuel Butona Basıldıysa -> TARA
 if tara_buton:
     should_run_scan = True
 
-# 2. Otomatik Yenileme Açıksa VE Süre Dolduysa -> TARA
-# (Tabloya tıklayınca süre dolmadıysa burası False olur ve tarama yapmaz)
+# Otomatik yenileme kontrolü
 if oto_yenile:
     gecen_sure = time.time() - st.session_state.last_fetch_time
     if gecen_sure > yenileme_hizi:
         should_run_scan = True
 
-# --- TARAMA İŞLEMİ ---
+# TARAMA BAŞLAT
 if should_run_scan:
     with st.spinner(f'{secilen_pivot_isim} verileri taranıyor...'):
         df_sonuc = tarama_yap(pivot_tf, secilen_pivot_isim)
         st.session_state.df = df_sonuc
 
 # --- GÖSTERİM BÖLÜMÜ ---
-st.title(f"🦁 Pro Pivot Terminali: {secilen_pivot_isim}")
-
 if not st.session_state.df.empty:
     df = st.session_state.df
     st.info(f"Son Güncelleme: {st.session_state.son_guncelleme} | Referans: {secilen_pivot_isim} | EMA: {ema_periyot}")
@@ -222,7 +216,6 @@ if not st.session_state.df.empty:
 
     with col1:
         st.subheader("📊 Piyasa Tablosu (Seçim Yapın)")
-        # Tablo seçimi
         event = st.dataframe(
             df[['Borsa', 'Coin', 'Fiyat', 'Pivot', 'Fark (%)', 'RSI', 'Trend', 'Durum', 'Sinyal']].style.applymap(
                 lambda x: 'color: green' if 'YÜKSELİŞ' in str(x) else 'color: red' if 'DÜŞÜŞ' in str(x) else '', subset=['Trend']
@@ -239,6 +232,7 @@ if not st.session_state.df.empty:
         st.subheader("🔍 Grafik Analizi")
         gosterilecek_coin = st.session_state.secilen_coin_kodu
         
+        # Seçim yoksa ilkini göster
         if gosterilecek_coin is None and not df.empty:
             gosterilecek_coin = df.iloc[0]['Coin']
             
@@ -254,19 +248,10 @@ if not st.session_state.df.empty:
                 c3.metric("Trend", "BULLISH" if "YÜKSELİŞ" in row['Trend'] else "BEARISH", delta_color="normal")
             except IndexError:
                 st.warning("Veri bulunamadı.")
-
 else:
     st.warning("Henüz tarama yapılmadı. Sol menüden 'Taramayı Başlat' butonuna basın.")
 
-# --- GERİ SAYIM ve DÖNGÜ ---
+# OTOMATİK YENİLEME LOOPU (Sürekli Yenileme Yerine Sleep Kullanımı)
 if oto_yenile:
-    # Kalan süreyi hesapla
-    gecen_sure = time.time() - st.session_state.last_fetch_time
-    kalan_sure = int(yenileme_hizi - gecen_sure)
-    
-    if kalan_sure > 0:
-        st.caption(f"⏳ Sonraki taramaya yaklaşık {kalan_sure} saniye kaldı. Tabloya tıklayabilirsiniz, tarama yenilenmez.")
-        time.sleep(1) # CPU'yu yormamak için kısa bekleme
-        st.rerun() # Sayacı güncellemek için sayfayı yenile
-    else:
-        st.rerun() # Süre bitti, tarama yapmak için yenile
+    time.sleep(yenileme_hizi)
+    st.rerun()
