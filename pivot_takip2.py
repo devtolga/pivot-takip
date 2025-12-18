@@ -6,11 +6,10 @@ import plotly.graph_objects as go
 from datetime import datetime
 import sys
 
-# --- SAYFA AYARLARI (EN BAŞTA OLMALI) ---
-st.set_page_config(page_title="Pro Pivot Terminali V13", layout="wide", page_icon="🦁")
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="Pro Pivot Terminali V14", layout="wide", page_icon="🦁")
 
-# --- PLATFORM KONTROLÜ (SES İÇİN - SESSİZ MOD) ---
-# Sesli uyarılar tamamen kapatıldı, sadece sistem kontrolü var
+# --- PLATFORM KONTROLÜ (SESSİZ MOD) ---
 windows_platform = False 
 
 # --- HAFIZA (SESSION STATE) ---
@@ -38,7 +37,11 @@ secilen_pivot_isim = st.sidebar.selectbox("Pivot Zaman Dilimi", list(pivot_secen
 pivot_tf = pivot_secenekleri[secilen_pivot_isim]
 
 oto_yenile = st.sidebar.checkbox("Otomatik Yenileme (Döngü)", value=False)
-yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", 10, 300, 60)
+
+# GÜNCELLEME: Maksimum süre 900 saniye (15 Dakika) yapıldı
+yenileme_hizi = st.sidebar.slider("Döngü Hızı (Saniye)", min_value=10, max_value=900, value=60)
+
+st.sidebar.caption(f"Seçilen Süre: {yenileme_hizi // 60} dakika {yenileme_hizi % 60} saniye")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 İndikatör Ayarları")
@@ -181,7 +184,6 @@ if tara_buton:
 # Otomatik Yenileme (Zaman Kontrolü)
 if oto_yenile:
     gecen_sure = time.time() - st.session_state.last_fetch_time
-    # Eğer süre dolduysa tara
     if gecen_sure > yenileme_hizi:
         should_run_scan = True
 
@@ -190,7 +192,6 @@ if should_run_scan:
     with st.spinner(f'{secilen_pivot_isim} verileri taranıyor...'):
         df_sonuc = tarama_yap(pivot_tf, secilen_pivot_isim)
         st.session_state.df = df_sonuc
-        # Taramadan sonra sayfayı bir kere yenile ki tablo güncellensin
         st.rerun()
 
 # --- GÖSTERİM BÖLÜMÜ ---
@@ -210,7 +211,6 @@ if not st.session_state.df.empty:
             on_select="rerun", selection_mode="single-row"
         )
         
-        # Seçilen coini hafızaya at
         if len(event.selection.rows) > 0:
             secilen_index = event.selection.rows[0]
             st.session_state.secilen_coin_kodu = df.iloc[secilen_index]['Coin']
@@ -219,7 +219,6 @@ if not st.session_state.df.empty:
         st.subheader("🔍 Grafik Analizi")
         gosterilecek_coin = st.session_state.secilen_coin_kodu
         
-        # Seçim yoksa ilkini göster
         if gosterilecek_coin is None and not df.empty:
             gosterilecek_coin = df.iloc[0]['Coin']
             
@@ -244,11 +243,9 @@ if oto_yenile:
     kalan_sure = int(yenileme_hizi - gecen_sure)
     
     if kalan_sure > 0:
-        # Sayacı göster ve 1 saniye bekle
         st.divider()
         st.caption(f"⏳ Otomatik yenilemeye kalan süre: **{kalan_sure}** saniye.")
         time.sleep(1)
         st.rerun()
     else:
-        # Süre bitti, yukarıdaki should_run_scan tetiklenecek
         st.rerun()
